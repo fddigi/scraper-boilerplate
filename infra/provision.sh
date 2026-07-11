@@ -9,7 +9,11 @@
 #      `wrangler secret put` (ADMIN_USER/ADMIN_PW_HASH are set separately by
 #      ./infra/add-user.sh, not here).
 #   3. Enables GitHub Pages for this repo (serving frontend/) via the GitHub API.
-#   4. Writes the generated non-secret identifiers back as GitHub repo secrets
+#   4. OPTIONAL: if HEALTHCHECKS_API_KEY is set, creates a per-project
+#      healthchecks.io check via infra/lib/healthchecks.sh and captures its
+#      ping URL. Skipped entirely (not an error) if the key isn't set - see
+#      .env.example's HEALTHCHECK_URL comment for the manual alternative.
+#   5. Writes the generated non-secret identifiers back as GitHub repo secrets
 #      via `gh secret set`, so deploy.yml can find the right Worker/db on every
 #      push to main.
 #
@@ -19,6 +23,11 @@
 #   TURSO_ORG              - your Turso organization slug
 #   CLOUDFLARE_API_TOKEN   - Cloudflare API token (Workers Scripts + KV + Pages edit)
 #   CLOUDFLARE_ACCOUNT_ID  - Cloudflare account id
+#
+# OPTIONAL ENV:
+#   HEALTHCHECKS_API_KEY   - Healthchecks.io Management API key (Project Settings
+#                            -> API access). Enables automatic per-project
+#                            healthcheck creation. Omit to skip that step entirely.
 #
 # Requires on PATH: curl, jq, gh, wrangler.
 #
@@ -37,8 +46,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/turso.sh
 source "${SCRIPT_DIR}/lib/turso.sh"
+# shellcheck source=lib/healthchecks.sh
+source "${SCRIPT_DIR}/lib/healthchecks.sh"
 
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$REPO_ROOT")}"
+HEALTHCHECK_URL=""
 
 main() {
   log_step "Provisioning project '${PROJECT_NAME}'"
@@ -51,18 +63,23 @@ main() {
   require_env TURSO_ORG
   require_env CLOUDFLARE_API_TOKEN
   require_env CLOUDFLARE_ACCOUNT_ID
+  # HEALTHCHECKS_API_KEY is deliberately NOT required - see provision_healthcheck().
 
   provision_turso_database
   provision_worker
   provision_pages
+  provision_healthcheck
   write_repo_secrets
 
   log_step "Provisioning complete for '${PROJECT_NAME}'"
+  if [[ -n "$HEALTHCHECK_URL" ]]; then
+    log_info "Healthcheck URL (also written to the HEALTHCHECK_URL repo secret): ${HEALTHCHECK_URL}"
+  fi
   log_info "Next step: ./infra/add-user.sh to create the first admin login."
 }
 
 provision_turso_database() {
-  log_step "1/4 Turso database"
+  log_step "1/5 Turso database"
   if turso_database_exists "$PROJECT_NAME"; then
     log_info "Database '${PROJECT_NAME}' already exists - skipping create (idempotent)."
   else
@@ -77,7 +94,7 @@ provision_turso_database() {
 }
 
 provision_worker() {
-  log_step "2/4 Cloudflare Worker"
+  log_step "2/5 Cloudflare Worker"
   log_info "Deploying Worker '${PROJECT_NAME}' via wrangler..."
   (cd "${REPO_ROOT}/worker" && wrangler deploy --name "$PROJECT_NAME")
 
@@ -95,7 +112,7 @@ provision_worker() {
 }
 
 provision_pages() {
-  log_step "3/4 GitHub Pages"
+  log_step "3/5 GitHub Pages"
   local repo_full_name
   repo_full_name="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 
@@ -108,11 +125,31 @@ provision_pages() {
   fi
 }
 
+provision_healthcheck() {
+  log_step "4/5 Healthchecks.io check (optional)"
+  if [[ -z "${HEALTHCHECKS_API_KEY:-}" ]]; then
+    log_info "HEALTHCHECKS_API_KEY not set - skipping automatic healthcheck creation."
+    log_info "You can still set HEALTHCHECK_URL manually in .env (see .env.example)."
+    return
+  fi
+  log_info "Creating (or finding existing) healthchecks.io check '${PROJECT_NAME}'..."
+  HEALTHCHECK_URL="$(healthchecks_create_or_get_check "$PROJECT_NAME")"
+  if [[ -z "$HEALTHCHECK_URL" || "$HEALTHCHECK_URL" == "null" ]]; then
+    log_warn "Healthchecks.io API call did not return a ping_url - check HEALTHCHECKS_API_KEY. Continuing without it."
+    HEALTHCHECK_URL=""
+    return
+  fi
+  log_info "Healthcheck ping URL: ${HEALTHCHECK_URL}"
+}
+
 write_repo_secrets() {
-  log_step "4/4 Writing generated identifiers back as repo secrets"
+  log_step "5/5 Writing generated identifiers back as repo secrets"
   gh_secret_set "TURSO_DB_NAME" "$PROJECT_NAME"
   gh_secret_set "CF_WORKER_NAME" "$PROJECT_NAME"
   gh_secret_set "CLOUDFLARE_ACCOUNT_ID" "$CLOUDFLARE_ACCOUNT_ID"
+  if [[ -n "$HEALTHCHECK_URL" ]]; then
+    gh_secret_set "HEALTHCHECK_URL" "$HEALTHCHECK_URL"
+  fi
   log_info "TURSO_AUTH_TOKEN / SESSION_HMAC_SECRET stay Worker-only secrets, not duplicated as repo secrets."
 }
 

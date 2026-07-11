@@ -51,10 +51,10 @@ Makefile                  `make install-launchd` osv.
 | # | Trin | Manuel / automatisk |
 |---|------|---------------------|
 | 1 | Klik "Use this template" på GitHub og navngiv det nye repo | **Manuel** (klik) |
-| 2 | Sæt organisation-secrets ÉN GANG for hele din GitHub-organisation: `TURSO_PLATFORM_TOKEN`, `TURSO_ORG`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | **Manuel** (kun første gang, arves af alle fremtidige projekter) |
-| 3 | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets, aktiverer GitHub Pages, skriver repo-secrets |
+| 2 | Sæt organisation-secrets ÉN GANG for hele din GitHub-organisation: `TURSO_PLATFORM_TOKEN`, `TURSO_ORG`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, og valgfrit `HEALTHCHECKS_API_KEY` | **Manuel** (kun første gang, arves af alle fremtidige projekter) |
+| 3 | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets, aktiverer GitHub Pages, opretter healthcheck (hvis `HEALTHCHECKS_API_KEY` er sat), skriver repo-secrets |
 | 4 | `git clone` det nye repo lokalt / på Mac Mini'en | **Manuel** (kommando) |
-| 5 | `cp .env.example .env` og udfyld `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` (fra trin 3's output, eller `turso db show <navn>`) | **Manuel** (udfyld værdier) |
+| 5 | `cp .env.example .env` og udfyld `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` / evt. `HEALTHCHECK_URL` (alle fra trin 3's output/repo-secrets, eller `turso db show <navn>`) | **Manuel** (udfyld værdier) |
 | 6 | `./infra/add-user.sh` (secret-mode, default) - opretter admin-login | **Manuel kald, automatisk logik** - password vises ÉN gang |
 | 7 | Ret `frontend/config.js`'s `API_BASE` til Worker-URL'en fra trin 3 | **Manuel** (én linje) |
 | 8 | `make venv && make install-launchd` på Mac Mini'en | **Manuel kald, automatisk resten** - venv, launchd-plist, `launchctl load` |
@@ -139,21 +139,27 @@ npx wrangler dev    # lokal dev-server (kræver ikke live Cloudflare-deploy)
 - Cloudflare Workers free: 100.000 requests/dag (kontoniveau, deles på tværs af
   alle Workers på kontoen - hold det for øje hvis du kører flere projekter).
 - GitHub free: ubegrænsede offentlige repos, Actions-minutter til hobby-brug, Pages.
+- Healthchecks.io free (valgfrit): 20 checks - rigeligt til én pr. projekt.
 
 ## Hvad er IKKE bygget/eksekveret i denne skabelon
 
 Vær ærlig med dig selv om følgende, før du regner med at alt bare virker:
 
 - **`infra/provision.sh`, `infra/destroy.sh` og `bootstrap.yml`/`deploy.yml` er
-  ALDRIG kørt mod en rigtig Cloudflare- eller Turso-konto.** De er skrevet til at
-  være fuldt funktionelle, syntaktisk validerede (`bash -n`) og idempotente, men
-  første reelle afprøvning sker når DU sætter organisation-secrets og trykker
-  "Run workflow" på `bootstrap.yml`.
+  ALDRIG kørt ende-til-ende mod en rigtig Cloudflare- eller Turso-konto.** De er
+  skrevet til at være fuldt funktionelle, syntaktisk validerede (`bash -n`) og
+  idempotente, men første reelle afprøvning sker når "Run workflow" trykkes på
+  `bootstrap.yml` med organisation-secrets sat (se PA SPEAKERS-testen i det
+  overordnede backlog for status på dette).
 - `infra/add-user.sh` og dele af `infra/lib/common.sh` (`wrangler_secret_put`,
   `gh_secret_set`) er derimod faktisk kørt lokalt under udviklingen af denne
   skabelon - men kun i deres "simuleret" gren (ingen `CLOUDFLARE_API_TOKEN` /
   `gh auth` til stede), som printer den kommando de ville have kørt i stedet for
   at kalde den. `--table-mode`'s SQL-logik er testet mod en lokal SQLite-fil.
+- **`infra/lib/healthchecks.sh`s Management API-nøgle er verificeret med et
+  reelt, read-only kald** (`GET /checks/` returnerede HTTP 200), men
+  `healthchecks_create_or_get_check()`s POST-kald (kaldt fra `provision.sh`) er
+  IKKE selv kørt mod en rigtig konto endnu - kun manuelt gennemgået.
 - **`make install-launchd` er ikke kørt for alvor** (dvs. `launchctl load` er
   ikke kaldt) - det ville registrere et rigtigt tilbagevendende baggrundsjob på
   den maskine, skabelonen blev bygget på. Plist-genereringen (variabel-udfyldning)
