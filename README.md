@@ -58,7 +58,7 @@ Makefile                  `make install-launchd` osv.
 | 4 | `git clone` det nye repo lokalt / på Mac Mini'en | **Manuel** (kommando) |
 | 5 | `cp .env.example .env` og udfyld `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` / evt. `HEALTHCHECK_URL` (alle fra trin 3's output/repo-secrets, eller `turso db show <navn>`) | **Manuel** (udfyld værdier) |
 | 6 | `./infra/add-user.sh` (secret-mode, default) - opretter admin-login | **Manuel kald, automatisk logik** - password vises ÉN gang |
-| 7 | Ret `frontend/config.js`'s `API_BASE` til Worker-URL'en fra trin 3 | **Manuel** (én linje) |
+| 7 | ~~Ret `frontend/config.js`~~ — sket automatisk i trin 3 (`provision.sh` udfylder og committer `API_BASE`) | **Automatisk** |
 | 8 | `make venv && make install-launchd` på Mac Mini'en | **Manuel kald, automatisk resten** - venv, launchd-plist, `launchctl load` |
 | 9 | Åbn GitHub Pages-URL'en, log ind, se data | **Manuel verifikation** |
 | 10 | Fremtidige pushes til `main` deployer Worker automatisk (`deploy.yml`); Pages opdaterer sig selv fra branchen | **Automatisk** |
