@@ -18,7 +18,7 @@
 
 import type { Context, Next } from "hono";
 import { verifySessionToken } from "./auth";
-import type { Env, Variables } from "./types";
+import type { Env, SessionPayload, Variables } from "./types";
 
 export function parseBearerToken(header: string | null | undefined): string | null {
   if (!header || !header.startsWith("Bearer ")) return null;
@@ -26,20 +26,37 @@ export function parseBearerToken(header: string | null | undefined): string | nu
   return token || null;
 }
 
+// FRAMEWORK-AGNOSTIC CORE: takes only primitives (a header string, a secret
+// string), returns a session payload or null. No Hono types anywhere in this
+// function - a project NOT using Hono (e.g. a plain `addEventListener("fetch",
+// ...)` Worker, reading `request.headers.get("Authorization")` directly) can
+// call this exactly the same way requireAuth() below does, without pulling in
+// Hono at all. Split out after a real project (PLAGG, plain-JS Worker)
+// needed to reuse the auth *logic* while auth.ts's hashPassword/verifyPassword/
+// createSessionToken/verifySessionToken were already reusable, but the OLD
+// requireAuth() hard-coded Hono's Context type through the whole function,
+// forcing a full rewrite instead of a straight import.
+export async function authenticateRequest(
+  authorizationHeader: string | null | undefined,
+  hmacSecret: string,
+): Promise<SessionPayload | null> {
+  const token = parseBearerToken(authorizationHeader);
+  if (!token) return null;
+  return verifySessionToken(token, hmacSecret);
+}
+
+// THIN HONO ADAPTER around authenticateRequest() above. This is the only
+// Hono-specific part - everything that actually verifies the token lives in
+// the framework-agnostic function.
 export async function requireAuth(
   c: Context<{ Bindings: Env; Variables: Variables }>,
   next: Next,
 ) {
-  const token = parseBearerToken(c.req.header("Authorization"));
-  if (!token) {
+  const session = await authenticateRequest(c.req.header("Authorization"), c.env.SESSION_HMAC_SECRET);
+  if (!session) {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  const payload = await verifySessionToken(token, c.env.SESSION_HMAC_SECRET);
-  if (!payload) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  c.set("session", payload);
+  c.set("session", session);
   await next();
 }

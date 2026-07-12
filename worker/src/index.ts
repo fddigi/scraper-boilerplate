@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { createSessionToken, verifyPassword } from "./auth";
+import { resolveAllowedOrigin } from "./cors";
 import { getDbClient } from "./db";
 import { requireAuth } from "./middleware";
 import { checkAndIncrementLoginAttempts } from "./rateLimit";
@@ -12,13 +13,15 @@ import type { Env, Variables } from "./types";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// CORS locked to exactly one configurable Pages origin - never "*". `origin` needs
-// env access, which in Hono is only available per-request, hence the wrapper.
-// No `credentials: true` - that flag is for cookies, and auth here is a bearer
-// token in an Authorization header instead (see middleware.ts for why).
+// CORS locked to exactly one configurable Pages origin in production - never
+// "*" - PLUS any localhost/127.0.0.1 origin for local dev (see cors.ts).
+// `origin` needs env access, which in Hono is only available per-request,
+// hence the wrapper. No `credentials: true` - that flag is for cookies, and
+// auth here is a bearer token in an Authorization header instead (see
+// middleware.ts for why).
 app.use("*", async (c, next) => {
   const middleware = cors({
-    origin: c.env.ALLOWED_ORIGIN,
+    origin: (requestOrigin) => resolveAllowedOrigin(requestOrigin, c.env.ALLOWED_ORIGIN),
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
   });

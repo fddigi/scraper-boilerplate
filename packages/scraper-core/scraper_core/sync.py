@@ -8,22 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from .local_db import LocalStore
+from .sql_safety import safe_ident as _safe_ident
 from .turso_client import TursoClient
 
 logger = logging.getLogger(__name__)
-
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _safe_ident(name: str) -> str:
-    """Table/column names can't be parameter-bound in SQL, so we allow-list them
-    with a strict identifier regex instead of interpolating raw strings."""
-    if not _IDENT_RE.match(name):
-        raise ValueError(f"Unsafe SQL identifier: {name!r}")
-    return name
 
 
 def sync_pending(

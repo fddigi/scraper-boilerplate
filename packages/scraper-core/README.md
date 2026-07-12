@@ -33,8 +33,20 @@ Delt Python-bibliotek for mønsteret: hent data -> dedup lokalt i SQLite -> delt
   det simple boolean-mønster i `local_db.upsert_if_changed()` billigere at forstå.
 - `scraper_core.watchdog` — `run_with_timeout()`, giver én kilde en wall-clock-budget
   i en multi-kilde-pipeline, så én hængende kilde ikke blokerer resten af kørslen.
+- `scraper_core.validate_paths` — `validate_paths()`, kald ved opstart for hver
+  konfigureret fil-/mappesti (credentials, storage-state-filer). Fejler TYDELIGT
+  hvis en sti er sat men ikke findes, i stedet for stille fallback-adfærd.
+- `scraper_core.generations` — `publish_generation()`/`cleanup_superseded()`,
+  atomisk "hele batch'en eller intet"-publicering til Turso. Et andet
+  ligeværdigt mønster ved siden af `local_db`/`sync`s row-level delta-sync,
+  til output der bliver fuldstændigt genberegnet hver kørsel (ikke inkrementelt
+  opdateret) — se modulets docstring for hvornår det ene passer bedre end det andet.
 
 ## Installation (lokalt, i editable mode)
+
+**Kræver Python 3.11 eller nyere.** En ældre `python3` giver kun en generisk
+pip-fejl uden at nævne versionskravet — tjek `python3.11 --version` findes
+FØR du kører nedenstående, ellers fejler `pip install` med en uklar besked.
 
 ```bash
 python3.11 -m venv .venv
