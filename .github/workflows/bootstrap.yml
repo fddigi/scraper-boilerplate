@@ -47,6 +47,13 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y jq
 
+      - name: Install worker dependencies
+        # provision.sh calls `wrangler deploy` from worker/, which needs its
+        # own npm deps (hono, @libsql/client, ...) installed first - ci.yml
+        # and deploy.yml both already had this step, bootstrap.yml didn't.
+        working-directory: worker
+        run: npm ci
+
       - name: Run infra/provision.sh
         env:
           TURSO_PLATFORM_TOKEN: ${{ secrets.TURSO_PLATFORM_TOKEN }}

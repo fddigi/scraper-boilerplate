@@ -48,6 +48,16 @@ Makefile                  `make install-launchd` osv.
 
 ## Nyt projekt på 10 minutter
 
+**Vigtigt, tjek FØR første bootstrap-kørsel: Organization → Settings → Actions →
+General → Workflow permissions skal være sat til "Read and write permissions"**
+(org-niveau, og/eller tilladt per-repo). Nogle GitHub-organisationer har som
+standard/politik "Read permissions" org-bredt — det blokerer BÅDE GitHub
+Pages-aktivering OG `provision.sh`s commit-tilbage-trin med en 403
+("Resource not accessible by integration"), uanset hvad selve workflow-filens
+egen `permissions:`-blok beder om. En workflow-fil kan kun indskrænke org/repo-
+loftet, aldrig udvide det. `provision.sh` fejler ikke hårdt på dette (Turso/
+Worker-provisionering fortsætter), men Pages/commit-tilbage kræver rettelsen.
+
 **Vigtigt: nye projekter skal oprettes som OFFENTLIGE repos** (`gh repo create ... --template fddigi/scraper-boilerplate --public`, IKKE `--private`). Årsag: GitHub-organisationens gratis plan tillader kun deling af organisation-level secrets med offentlige repos ("Organization secrets cannot be used by private repositories with your plan") — private repos ville se alle fire org-secrets som tomme strenge i Actions, uden nogen fejlmelding, hvilket blokerer hele bootstrap-flowet. Ingen hemmeligheder committes nogensinde i selve koden (kun `wrangler secret put`/repo-secrets), så offentlig synlighed af kildekoden er et bevidst, sikkert valg her — samme mønster som PLAGG-projektet allerede bruger.
 
 | # | Trin | Manuel / automatisk |

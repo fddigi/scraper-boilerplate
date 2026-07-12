@@ -210,11 +210,30 @@ provision_pages() {
 
   if gh api "repos/${repo_full_name}/pages" >/dev/null 2>&1; then
     log_info "GitHub Pages already enabled - skipping (idempotent)."
-  else
-    log_info "Enabling GitHub Pages (branch=main, path=/frontend)..."
-    gh api "repos/${repo_full_name}/pages" -X POST \
-      -f "source[branch]=main" -f "source[path]=/frontend" >/dev/null
+    return
   fi
+
+  log_info "Enabling GitHub Pages (branch=main, path=/frontend)..."
+  local pages_error
+  if pages_error="$(gh api "repos/${repo_full_name}/pages" -X POST \
+      -f "source[branch]=main" -f "source[path]=/frontend" 2>&1)"; then
+    log_info "GitHub Pages enabled."
+    return
+  fi
+
+  # Deliberately does NOT exit the script here - Turso/Worker provisioning
+  # above already succeeded and shouldn't be discarded over a Pages failure.
+  if echo "$pages_error" | grep -qi "not accessible by integration"; then
+    log_warn "GitHub Pages activation failed (403) - this is an ORGANIZATION-level" \
+      "policy, not something this script can fix: go to Organization -> Settings ->" \
+      "Actions -> General -> Workflow permissions and set it to 'Read and write" \
+      "permissions' (org-level, and/or per-repo). The same restriction will also" \
+      "block the commit-back step further down."
+  else
+    log_warn "GitHub Pages activation failed: ${pages_error}"
+  fi
+  log_warn "Continuing anyway - enable Pages manually (Settings -> Pages, branch=main," \
+    "path=/frontend) once permissions are fixed, or re-run this script (idempotent)."
 }
 
 provision_healthcheck() {
@@ -257,8 +276,10 @@ commit_generated_config() {
     elif git commit -m "provision.sh: fill in generated Worker/Pages config" >/dev/null && git push; then
       log_info "Pushed generated wrangler.toml/config.js to main."
     else
-      log_warn "Could not commit/push generated config - do it manually:" \
-        "git add worker/wrangler.toml frontend/config.js && git commit -m 'fill in config' && git push"
+      log_warn "Could not commit/push generated config (often the same org-level" \
+        "'Workflow permissions' restriction as GitHub Pages above, if that also failed)." \
+        "Do it manually: git add worker/wrangler.toml frontend/config.js &&" \
+        "git commit -m 'fill in config' && git push"
     fi
   ) || log_warn "commit_generated_config failed - the cloud resources above are still provisioned correctly."
 }
