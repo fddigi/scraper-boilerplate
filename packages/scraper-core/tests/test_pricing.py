@@ -47,3 +47,25 @@ def test_parse_price_forced_decimal_style_overrides_auto():
     assert parse_price("1,234", unit="major", decimal_style="dot") == pytest.approx(1234.0)
     # "comma" style treats "," as the decimal point.
     assert parse_price("1,234", unit="major", decimal_style="comma") == pytest.approx(1.234)
+
+
+def test_parse_price_auto_cannot_distinguish_thousands_dot_from_decimal_dot():
+    """Documents a real, confirmed limitation (Fund 16) rather than a bug to
+    fix: "1.234" (German/Danish thousands, no decimal) and "47.26" (Vinted
+    decimal) have identical structure - one dot, no comma - so "auto" always
+    treats a lone dot as decimal. Callers with a German/Danish-style source
+    MUST pass decimal_style="comma" explicitly; "auto" silently gives the
+    wrong answer for that convention, as asserted here."""
+    assert parse_price("1.234", unit="major", decimal_style="auto") == pytest.approx(1.234)
+    assert parse_price("1.234", unit="major", decimal_style="comma") == pytest.approx(1234.0)
+    assert parse_price("47.26", unit="major", decimal_style="auto") == pytest.approx(47.26)
+
+
+def test_parse_price_space_as_thousands_separator():
+    """Regression test (Fund 17): Scandinavian/French formatting uses a plain
+    or non-breaking space as the thousands separator - previously stopped
+    parsing at the first space and silently returned only the first digit
+    group (e.g. 8.0 instead of 8500.0)."""
+    assert parse_price("8 500 kr", unit="major") == pytest.approx(8500.0)
+    assert parse_price("1 234 kr", unit="major") == pytest.approx(1234.0)
+    assert parse_price("1\xa0234,56 kr", unit="major") == pytest.approx(1234.56)

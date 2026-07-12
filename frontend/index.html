@@ -18,11 +18,22 @@
 
   <script src="config.js"></script>
   <script>
-    // Session lives in an HttpOnly cookie set by the Worker - this page never
-    // touches a password or API key, it just always sends credentials: 'include'.
+    // Session lives as a bearer token in localStorage, NOT a cookie - see
+    // login.html's comment for why (Safari blocks third-party cookies outright).
+    // This page never touches a password or API key, only this one token.
+    function authHeaders() {
+      const token = localStorage.getItem("session_token");
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    }
+
     async function requireSession() {
-      const res = await fetch(`${API_BASE}/api/me`, { credentials: "include" });
+      if (!localStorage.getItem("session_token")) {
+        window.location.href = "login.html";
+        return null;
+      }
+      const res = await fetch(`${API_BASE}/api/me`, { headers: authHeaders() });
       if (!res.ok) {
+        localStorage.removeItem("session_token");
         window.location.href = "login.html";
         return null;
       }
@@ -30,7 +41,7 @@
     }
 
     async function loadPosts() {
-      const res = await fetch(`${API_BASE}/api/posts`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/api/posts`, { headers: authHeaders() });
       if (!res.ok) {
         document.getElementById("error").textContent = "Kunne ikke hente data.";
         return;
@@ -50,7 +61,8 @@
     }
 
     document.getElementById("logout").addEventListener("click", async () => {
-      await fetch(`${API_BASE}/logout`, { method: "POST", credentials: "include" });
+      await fetch(`${API_BASE}/logout`, { method: "POST", headers: authHeaders() }).catch(() => {});
+      localStorage.removeItem("session_token");
       window.location.href = "login.html";
     });
 

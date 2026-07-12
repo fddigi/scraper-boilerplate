@@ -18,7 +18,12 @@ import os
 import sys
 
 # Must match PBKDF2_ITERATIONS / HASH_BYTE_LENGTH in worker/src/auth.ts exactly.
-ITERATIONS = 210_000
+# 100_000, NOT higher: Cloudflare Workers' actual production crypto.subtle
+# enforces a HARD ceiling of 100_000 PBKDF2 iterations. A previous 210_000
+# value passed every test (plain Node, wrangler dev) - neither enforces this
+# limit - while every real login failed in the actual deployed Worker. See
+# auth.ts's matching comment and SCRAPING_LESSONS.md before raising this.
+ITERATIONS = 100_000
 SALT_BYTES = 16
 KEY_BYTES = 32
 

@@ -18,9 +18,11 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 [vars]
 # CORS is locked to exactly this one origin - the project's GitHub Pages site.
 ALLOWED_ORIGIN = "https://REPLACE_WITH_GITHUB_USERNAME.github.io"
-# Session cookie lifetime in days (default 30). Purely cosmetic here; the real
-# value read by the code always comes from this var with a "30" fallback.
-SESSION_COOKIE_MAX_AGE_DAYS = "30"
+# Session token lifetime in days (default 30). Auth is a bearer token in
+# localStorage, NOT a cookie - see worker/src/middleware.ts for why (Safari
+# blocks third-party cookies outright; GitHub Pages + Worker are different
+# domains).
+SESSION_TOKEN_MAX_AGE_DAYS = "30"
 
 # --- Secrets - NEVER put these in this file. Set via `wrangler secret put <NAME>` ---
 # (infra/provision.sh and infra/add-user.sh document/perform these calls)

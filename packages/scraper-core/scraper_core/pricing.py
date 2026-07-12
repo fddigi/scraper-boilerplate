@@ -44,6 +44,26 @@ def parse_price(
         "comma" - force comma-as-decimal, dot-as-thousands.
         "dot"   - force dot-as-decimal, strip any "," as a thousands separator.
 
+        WARNING (found the hard way - a real production bug, not hypothetical):
+        "auto" CANNOT distinguish a pure thousands-separator dot from a decimal
+        dot when there is no comma in the string at all - "1.234" (German/
+        Danish: one thousand two hundred thirty-four, no decimal part) and
+        "47.26" (Vinted: forty-seven point twenty-six) have IDENTICAL
+        structure (one dot, no comma), and "auto" parses both as
+        dot-is-decimal, silently returning 1.234 instead of the intended
+        1234.0 for the first case. NEVER use "auto" for a source whose
+        convention includes dot-as-thousands-separator (German/Danish/most
+        European conventions) - pass `decimal_style="comma"` explicitly
+        instead. "auto" is only safe when the source's convention is KNOWN to
+        never use "." as a thousands separator (e.g. Vinted's own decimal-
+        string convention).
+
+    Whitespace (including non-breaking space, U+00A0) INSIDE the number is
+    treated as a thousands separator and stripped before parsing - common in
+    Scandinavian/French formatting (e.g. "8 500 kr" -> 8500.0). This does not
+    interact with `decimal_style`: whitespace is always a thousands separator,
+    never a decimal separator, regardless of the "auto"/"comma"/"dot" choice.
+
     Returns None for empty/unparseable input - this function never raises on
     bad input, so callers decide how to handle a missing price. It DOES raise
     ValueError for a bad `unit`/`decimal_style` argument - those are
@@ -60,15 +80,19 @@ def parse_price(
     if isinstance(raw, (int, float)):
         value = float(raw)
     else:
-        # Extract the number as a contiguous digit-led/digit-trailed run, not
-        # by deleting disallowed characters from the whole string - the latter
-        # would keep a stray "." from an abbreviation like "kr." even though
-        # it's separated from the digits by a space and isn't part of the
-        # number at all (a real bug caught by this module's own test suite).
-        match = re.search(r"\d[\d.,]*\d|\d", str(raw).strip())
+        # Extract the number as a contiguous digit-led/digit-trailed run
+        # (whitespace/nbsp allowed INSIDE it as a thousands separator, e.g.
+        # "8 500"), not by deleting disallowed characters from the whole
+        # string - the latter would keep a stray "." from an abbreviation
+        # like "kr." even though it's separated from the digits by a space
+        # and isn't part of the number at all (a real bug caught by this
+        # module's own test suite).
+        match = re.search(r"\d[\d.,\s\xa0]*\d|\d", str(raw).strip())
         if match is None:
             return None
-        text = match.group(0)
+        # Whitespace is always a thousands separator, stripped unconditionally
+        # before decimal_style logic runs - it never carries decimal meaning.
+        text = re.sub(r"[\s\xa0]", "", match.group(0))
 
         style = decimal_style
         if style == "auto":

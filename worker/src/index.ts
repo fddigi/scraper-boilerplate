@@ -3,11 +3,10 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { deleteCookie, setCookie } from "hono/cookie";
 
 import { createSessionToken, verifyPassword } from "./auth";
 import { getDbClient } from "./db";
-import { requireAuth, SESSION_COOKIE_NAME } from "./middleware";
+import { requireAuth } from "./middleware";
 import { checkAndIncrementLoginAttempts } from "./rateLimit";
 import type { Env, Variables } from "./types";
 
@@ -15,12 +14,13 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // CORS locked to exactly one configurable Pages origin - never "*". `origin` needs
 // env access, which in Hono is only available per-request, hence the wrapper.
+// No `credentials: true` - that flag is for cookies, and auth here is a bearer
+// token in an Authorization header instead (see middleware.ts for why).
 app.use("*", async (c, next) => {
   const middleware = cors({
     origin: c.env.ALLOWED_ORIGIN,
-    credentials: true,
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type"],
+    allowHeaders: ["Content-Type", "Authorization"],
   });
   return middleware(c, next);
 });
@@ -59,26 +59,24 @@ app.post("/login", async (c) => {
     return c.json({ error: "invalid credentials" }, 401);
   }
 
-  const maxAgeDays = Number(c.env.SESSION_COOKIE_MAX_AGE_DAYS ?? "30");
+  const maxAgeDays = Number(c.env.SESSION_TOKEN_MAX_AGE_DAYS ?? "30");
   const maxAgeSeconds = maxAgeDays * 24 * 60 * 60;
   const token = await createSessionToken(
     { sub: username, role: "admin", exp: Math.floor(Date.now() / 1000) + maxAgeSeconds },
     c.env.SESSION_HMAC_SECRET,
   );
 
-  setCookie(c, SESSION_COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Strict",
-    path: "/",
-    maxAge: maxAgeSeconds,
-  });
-
-  return c.json({ ok: true, username, role: "admin" });
+  // Token goes in the JSON body, not a cookie - the frontend stores it in
+  // localStorage and sends it back as `Authorization: Bearer <token>`. See
+  // middleware.ts for why a cookie doesn't work here (Safari ITP).
+  return c.json({ ok: true, username, role: "admin", token });
 });
 
+// Stateless tokens (no server-side session store) - there is nothing to
+// revoke server-side, so /logout exists mainly for symmetry/future use
+// (e.g. a denylist) and to require a valid token before acknowledging.
+// The actual logout action is the frontend deleting its localStorage token.
 app.post("/logout", requireAuth, (c) => {
-  deleteCookie(c, SESSION_COOKIE_NAME, { path: "/" });
   return c.json({ ok: true });
 });
 

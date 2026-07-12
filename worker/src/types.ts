@@ -10,7 +10,7 @@ export interface Env {
   ADMIN_USER: string;
   ADMIN_PW_HASH: string;
   ALLOWED_ORIGIN: string;
-  SESSION_COOKIE_MAX_AGE_DAYS?: string;
+  SESSION_TOKEN_MAX_AGE_DAYS?: string;
   RATE_LIMIT_KV: KVNamespace;
 }
 

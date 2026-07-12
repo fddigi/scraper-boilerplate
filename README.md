@@ -19,15 +19,19 @@ flowchart LR
     end
     LDB -- "kun nye/ændrede rækker\n(delta-sync)" --> T[("Turso / libSQL")]
     W["Cloudflare Worker\n(Hono API-proxy)"] <-- "libsql-client" --> T
-    F["Statisk frontend\n(GitHub Pages)"] -- "fetch + cookie\ncredentials: include" --> W
+    F["Statisk frontend\n(GitHub Pages)"] -- "fetch +\nAuthorization: Bearer" --> W
     Bruger(("Bruger")) --> F
 ```
 
 Nøgleprincipper:
 - **Delta-writes, aldrig fuld-tabel-rewrites.** Dedup/"seen"-logik holdes lokalt i
   SQLite; kun nye/ændrede rækker sendes til Turso, i en batch pr. kørsel.
-- **Én Worker pr. projekt**, ikke én pr. bruger. Auth er cookie-baseret, ikke en
-  delt API-nøgle i frontend-JS.
+- **Én Worker pr. projekt**, ikke én pr. bruger. Auth er et `Authorization: Bearer`-
+  token i `localStorage`, IKKE en cookie og IKKE en delt API-nøgle i frontend-JS.
+  Cookie-baseret session blev afprøvet først og fejlede reelt i Safari (ITP blokerer
+  alle third-party-cookies uanset `SameSite`, da frontend og Worker ligger på
+  forskellige domæner) — se `worker/src/middleware.ts`s kommentar og
+  `SCRAPING_LESSONS.md`.
 - **Ingen håndrullet HTTP** mod Tursos `/v2/pipeline` - altid den officielle
   `libsql-client`-SDK (Python og TypeScript), altid parameterbinding.
 - **Alt er variabelt via `.env`/secrets** - ingen hemmeligheder i kode, YAML eller
@@ -51,12 +55,32 @@ Makefile                  `make install-launchd` osv.
 **Vigtigt, tjek FØR første bootstrap-kørsel: Organization → Settings → Actions →
 General → Workflow permissions skal være sat til "Read and write permissions"**
 (org-niveau, og/eller tilladt per-repo). Nogle GitHub-organisationer har som
-standard/politik "Read permissions" org-bredt — det blokerer BÅDE GitHub
-Pages-aktivering OG `provision.sh`s commit-tilbage-trin med en 403
-("Resource not accessible by integration"), uanset hvad selve workflow-filens
-egen `permissions:`-blok beder om. En workflow-fil kan kun indskrænke org/repo-
-loftet, aldrig udvide det. `provision.sh` fejler ikke hårdt på dette (Turso/
-Worker-provisionering fortsætter), men Pages/commit-tilbage kræver rettelsen.
+standard/politik "Read permissions" org-bredt — det blokerer `provision.sh`s
+commit-tilbage-trin med en 403 ("Resource not accessible by integration"),
+uanset hvad selve workflow-filens egen `permissions:`-blok beder om. En
+workflow-fil kan kun indskrænke org/repo-loftet, aldrig udvide det.
+`provision.sh` fejler ikke hårdt på dette (Turso/Worker-provisionering
+fortsætter), men commit-tilbage kræver rettelsen.
+
+**Vigtigt, ÉT MANUELT ENGANGS-TRIN pr. projekt: aktivér GitHub Pages selv,
+FØR eller lige efter bootstrap.yml.** Gå til repoets **Settings → Pages →
+Build and deployment → Source: "GitHub Actions"**. Dette kan IKKE
+automatiseres — `GITHUB_TOKEN` har aldrig lov til at oprette/aktivere en
+repos Pages-site, uanset permissions-indstillinger; det kræver en rigtig
+bruger-/PAT-legitimation (bekræftet mod GitHubs API, se `provision.sh`s
+`provision_pages()`-kommentar). `deploy.yml`s `deploy-pages`-job publicerer
+`frontend/` automatisk ved hvert push, når Pages først er aktiveret.
+
+**Vigtigt: `provision.sh`s sidste trin (repo-secrets) kan heller ikke lykkes
+via `GITHUB_TOKEN`** — der findes intet permission-scope, der giver
+`GITHUB_TOKEN` lov til at skrive/administrere en repos Actions-secrets,
+under nogen konfiguration. Scriptet advarer og fortsætter i stedet for at
+crashe. To muligheder: (a) sæt de 4 secrets manuelt bagefter med din egen
+`gh`-session (`gh secret set TURSO_DB_NAME --body '<projektnavn>'` osv. —
+scriptets egen advarsel viser de præcise kommandoer), eller (b) opret et
+fine-grained PAT med "Secrets: write"-repository-rettighed, gem det som et
+org-secret (fx `GH_PAT`), og brug det som `bootstrap.yml`s `GH_TOKEN` for
+dette trin i stedet for `${{ github.token }}`.
 
 **Vigtigt: nye projekter skal oprettes som OFFENTLIGE repos** (`gh repo create ... --template fddigi/scraper-boilerplate --public`, IKKE `--private`). Årsag: GitHub-organisationens gratis plan tillader kun deling af organisation-level secrets med offentlige repos ("Organization secrets cannot be used by private repositories with your plan") — private repos ville se alle fire org-secrets som tomme strenge i Actions, uden nogen fejlmelding, hvilket blokerer hele bootstrap-flowet. Ingen hemmeligheder committes nogensinde i selve koden (kun `wrangler secret put`/repo-secrets), så offentlig synlighed af kildekoden er et bevidst, sikkert valg her — samme mønster som PLAGG-projektet allerede bruger.
 
@@ -64,7 +88,8 @@ Worker-provisionering fortsætter), men Pages/commit-tilbage kræver rettelsen.
 |---|------|---------------------|
 | 1 | Klik "Use this template" på GitHub (eller `gh repo create <navn> --template fddigi/scraper-boilerplate --public --clone`) og navngiv det nye repo | **Manuel** (klik/kommando) |
 | 2 | Sæt organisation-secrets ÉN GANG for hele din GitHub-organisation: `TURSO_PLATFORM_TOKEN`, `TURSO_ORG`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, og valgfrit `HEALTHCHECKS_API_KEY` | **Manuel** (kun første gang, arves af alle fremtidige projekter) |
-| 3 | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets, aktiverer GitHub Pages, opretter healthcheck (hvis `HEALTHCHECKS_API_KEY` er sat), skriver repo-secrets |
+| 3a | Aktivér GitHub Pages manuelt: Settings → Pages → Source: "GitHub Actions" | **Manuel, engangs, kan IKKE automatiseres** (se boks ovenfor) |
+| 3b | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets, forsøger repo-secrets (kan kræve manuel opfølgning, se boks ovenfor) |
 | 4 | `git clone` det nye repo lokalt / på Mac Mini'en | **Manuel** (kommando) |
 | 5 | `cp .env.example .env`, kør `./infra/local-turso-env.sh --write` (kræver `turso auth login` — se "Lokal Turso-adgang" nedenfor) for at udfylde `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, og evt. `HEALTHCHECK_URL` manuelt fra repo-secrets | **Manuel kald, automatisk udfyldning** |
 | 6 | `./infra/add-user.sh` (secret-mode, default) - opretter admin-login | **Manuel kald, automatisk logik** - password vises ÉN gang |
@@ -184,44 +209,37 @@ npx wrangler dev    # lokal dev-server (kræver ikke live Cloudflare-deploy)
 - GitHub free: ubegrænsede offentlige repos, Actions-minutter til hobby-brug, Pages.
 - Healthchecks.io free (valgfrit): 20 checks - rigeligt til én pr. projekt.
 
-## Hvad er IKKE bygget/eksekveret i denne skabelon
+## Valideret i praksis
 
-Vær ærlig med dig selv om følgende, før du regner med at alt bare virker:
+Denne skabelon ER nu kørt ende-til-ende mod rigtige Cloudflare-, Turso- og
+GitHub-konti — ikke kun syntaks-valideret. Det første rigtige projekt bygget
+herpå (`pa-speakers`) fandt og rettede 25 konkrete fund undervejs, heraf flere
+alvorlige (bl.a. et login-system der var 100% ødelagt i produktion pga. en
+PBKDF2-iterationsgrænse ingen lokale tests fangede, og en cookie-baseret
+session der virkede i Chrome men ikke Safari). Alle skabelon-niveau-fund er
+rettet i denne repos historik — se `docs/SCRAPING_LESSONS.md` og commit-loggen
+for detaljer. Kendte, resterende begrænsninger (dokumenteret, ikke skjulte):
 
-- **`infra/provision.sh`, `infra/destroy.sh` og `bootstrap.yml`/`deploy.yml` er
-  ALDRIG kørt ende-til-ende mod en rigtig Cloudflare- eller Turso-konto.** De er
-  skrevet til at være fuldt funktionelle, syntaktisk validerede (`bash -n`) og
-  idempotente, men første reelle afprøvning sker når "Run workflow" trykkes på
-  `bootstrap.yml` med organisation-secrets sat (se PA SPEAKERS-testen i det
-  overordnede backlog for status på dette).
-- `infra/add-user.sh` og dele af `infra/lib/common.sh` (`wrangler_secret_put`,
-  `gh_secret_set`) er derimod faktisk kørt lokalt under udviklingen af denne
-  skabelon - men kun i deres "simuleret" gren (ingen `CLOUDFLARE_API_TOKEN` /
-  `gh auth` til stede), som printer den kommando de ville have kørt i stedet for
-  at kalde den. `--table-mode`'s SQL-logik er testet mod en lokal SQLite-fil.
-- **`infra/lib/healthchecks.sh`s Management API-nøgle er verificeret med et
-  reelt, read-only kald** (`GET /checks/` returnerede HTTP 200), men
-  `healthchecks_create_or_get_check()`s POST-kald (kaldt fra `provision.sh`) er
-  IKKE selv kørt mod en rigtig konto endnu - kun manuelt gennemgået.
-- **`make install-launchd` er ikke kørt for alvor** (dvs. `launchctl load` er
-  ikke kaldt) - det ville registrere et rigtigt tilbagevendende baggrundsjob på
-  den maskine, skabelonen blev bygget på. Plist-genereringen (variabel-udfyldning)
-  er valideret separat med `plutil -lint`.
-- Selve dummy-scraperen (`scraper/scraper/sources/jsonplaceholder.py`) ER kørt
-  end-to-end flere gange mod den offentlige testkilde `jsonplaceholder.typicode.com`
-  og en lokal SQLite-fil, inkl. verifikation af at anden kørsel korrekt finder 0
-  nye/ændrede rækker (dedup virker).
-- For at gøre skabelonen brugbar som et rigtigt GitHub "template repository" skal
-  du selv (efter du har pushet dette til dit eget GitHub-repo) slå
-  **Settings → Template repository** til.
+- GitHub Pages-aktivering og repo-secrets-skrivning kræver hver et manuelt
+  engangs-trin (se de to bokse ovenfor) — bekræftet, hårde platformsbegrænsninger
+  på `GITHUB_TOKEN`, ikke noget denne skabelon kan automatisere væk.
+- `make install-launchd` er valideret separat (`plutil -lint` på den genererede
+  plist) men ikke kørt for alvor i selve skabelon-udviklingen — det ville
+  registrere et rigtigt baggrundsjob. `pa-speakers`s eget
+  `com.pa-speakers.scraper`-job (kørt via denne mekanisme) beviser mønstret
+  fungerer i praksis.
+- Dummy-scraperen (`scraper/scraper/sources/jsonplaceholder.py`) er kørt
+  end-to-end flere gange, inkl. verifikation af at dedup virker korrekt.
 
 ### Din tur: sådan aktiverer du det for første gang
 
 1. Push dette repo til dit eget GitHub-repo (ikke gjort af denne skabelon - intet
    remote er konfigureret).
 2. Slå "Template repository" til under repoets Settings.
-3. Sæt de fire organisation-secrets nævnt i tjeklisten ovenfor.
-4. Opret et nyt repo fra skabelonen og kør `bootstrap.yml`.
+3. Sæt de fire (plus valgfrit `HEALTHCHECKS_API_KEY`) organisation-secrets nævnt
+   i tjeklisten ovenfor, og bekræft org-niveau "Workflow permissions".
+4. Opret et nyt repo fra skabelonen, aktivér Pages manuelt (trin 3a), og kør
+   `bootstrap.yml` (trin 3b).
 
 ## Afvigelser fra opgavebeskrivelsen
 

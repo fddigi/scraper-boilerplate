@@ -37,9 +37,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # wrangler@4.110.0 (pinned below) requires Node >=22 - a previous Node 20
+      # pin here made wrangler fail near-instantly with no network call, easy
+      # to mistake for a logic bug in the KV-namespace code below instead.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install wrangler + jq
         run: |

@@ -13,6 +13,25 @@ import libsql_client
 from .config import Settings
 
 
+def _force_http_scheme(url: str) -> str:
+    """Rewrites a `libsql://` URL to `https://`, forcing libsql-client into
+    HTTP transport instead of its default WebSocket-based Hrana protocol.
+
+    Found the hard way: `create_client_sync()`'s default WebSocket mode
+    (`wss://`, derived from a `libsql://` URL) failed outright from a real
+    launchd-scheduled scraper run against a real Turso database
+    (`WSServerHandshakeError: 400`), while the exact same URL with `https://`
+    connected and executed immediately - WebSocket handshakes are more
+    sensitive to firewalls/proxies/network environments than plain HTTPS.
+    A short-lived, periodic script like this one gets none of Hrana's
+    connection-reuse/streaming benefits anyway, so HTTP mode is strictly
+    the better default here - not just a workaround for one flaky network.
+    """
+    if url.startswith("libsql://"):
+        return "https://" + url[len("libsql://") :]
+    return url
+
+
 class TursoClient:
     """Sync Turso/libSQL client for use from simple launchd-triggered scripts."""
 
@@ -24,7 +43,7 @@ class TursoClient:
                 "local-only mode instead of constructing this class."
             )
         self._client = libsql_client.create_client_sync(
-            url=settings.turso_database_url,
+            url=_force_http_scheme(settings.turso_database_url),
             auth_token=settings.turso_auth_token,
         )
 

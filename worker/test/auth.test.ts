@@ -2,6 +2,14 @@
 // plain Node (via vitest), not the Workers runtime - Node 20+/25 provides the same
 // Web Crypto (crypto.subtle) API used in src/auth.ts, so no Miniflare is needed
 // just to test this logic in isolation.
+//
+// IMPORTANT LIMITATION, found the hard way (see SCRAPING_LESSONS.md): these tests,
+// and `wrangler dev`, do NOT enforce Cloudflare Workers' actual production
+// crypto.subtle limits (e.g. the hard 100_000 PBKDF2-iteration ceiling). A
+// PBKDF2_ITERATIONS value that passes every test here and works in `wrangler dev`
+// can still be 100% broken in the real deployed Worker. Green tests are not proof
+// that auth works in production for anything platform-limit-adjacent - only a
+// real deployed Worker is.
 
 import { describe, expect, it } from "vitest";
 import {

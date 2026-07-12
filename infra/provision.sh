@@ -14,7 +14,10 @@
 #      (ADMIN_USER/ADMIN_PW_HASH are set separately by ./infra/add-user.sh, not
 #      here), and fills in frontend/config.js's API_BASE with the deployed
 #      Worker's real workers.dev URL.
-#   3. Enables GitHub Pages for this repo (serving frontend/) via the GitHub API.
+#   3. Checks whether GitHub Pages is enabled (idempotent) - does NOT try to
+#      enable it: that requires a real user/PAT credential and is documented
+#      as a one-time manual step (Settings -> Pages -> Source: "GitHub
+#      Actions"). See provision_pages() for why GITHUB_TOKEN can never do this.
 #   4. OPTIONAL: if HEALTHCHECKS_API_KEY is set, creates a per-project
 #      healthchecks.io check via infra/lib/healthchecks.sh and captures its
 #      ping URL. Skipped entirely (not an error) if the key isn't set - see
@@ -152,14 +155,19 @@ provision_worker() {
   kv_id="$(kv_lookup_id_by_title "$kv_title")"
   if [[ -z "$kv_id" ]]; then
     log_info "No existing KV namespace named '${kv_title}' - creating one..."
-    # NOTE: `wrangler kv namespace create RATE_LIMIT_KV` (no --title) would name
-    # it just "RATE_LIMIT_KV" - no project prefix - so our own reuse-lookup
-    # above would never find it again on a future re-run. --title fixes that.
+    # NOTE: the namespace's title/name is a POSITIONAL argument to this
+    # command, not a --title flag (verified against the exact pinned wrangler
+    # version's own --help output - an earlier version of this script assumed
+    # a --title flag that does not exist in this CLI at all, which failed
+    # hard in CI: "Unknown argument: title"). Passing the prefixed title
+    # directly here is also what makes our own reuse-lookup above able to
+    # find this namespace again on a future re-run - plain `RATE_LIMIT_KV`
+    # (no project prefix) would not match `kv_title`.
     # We deliberately do NOT parse `create`'s human-readable stdout for the id
     # (it can contain non-interactive-fallback prompt text that breaks naive
     # grep parsing in CI) - instead re-run the same reliable list|jq lookup
     # used for the reuse-check above, now that the namespace exists.
-    (cd "${REPO_ROOT}/worker" && wrangler kv namespace create RATE_LIMIT_KV --title "$kv_title") >/dev/null
+    (cd "${REPO_ROOT}/worker" && wrangler kv namespace create "$kv_title") >/dev/null
     kv_id="$(kv_lookup_id_by_title "$kv_title")"
   else
     log_info "Found existing KV namespace '${kv_title}' (id=${kv_id}) - reusing (idempotent)."
@@ -213,27 +221,28 @@ provision_pages() {
     return
   fi
 
-  log_info "Enabling GitHub Pages (branch=main, path=/frontend)..."
-  local pages_error
-  if pages_error="$(gh api "repos/${repo_full_name}/pages" -X POST \
-      -f "source[branch]=main" -f "source[path]=/frontend" 2>&1)"; then
-    log_info "GitHub Pages enabled."
-    return
-  fi
-
-  # Deliberately does NOT exit the script here - Turso/Worker provisioning
-  # above already succeeded and shouldn't be discarded over a Pages failure.
-  if echo "$pages_error" | grep -qi "not accessible by integration"; then
-    log_warn "GitHub Pages activation failed (403) - this is an ORGANIZATION-level" \
-      "policy, not something this script can fix: go to Organization -> Settings ->" \
-      "Actions -> General -> Workflow permissions and set it to 'Read and write" \
-      "permissions' (org-level, and/or per-repo). The same restriction will also" \
-      "block the commit-back step further down."
-  else
-    log_warn "GitHub Pages activation failed: ${pages_error}"
-  fi
-  log_warn "Continuing anyway - enable Pages manually (Settings -> Pages, branch=main," \
-    "path=/frontend) once permissions are fixed, or re-run this script (idempotent)."
+  # Deliberately does NOT attempt to create the Pages site via the API at
+  # all (an earlier version of this script tried a POST here and always
+  # failed). Confirmed impossible on two independent counts, verified with
+  # an authenticated user gh session against this exact API call: (1)
+  # creating/enabling a repo's Pages site is an administrative action GitHub
+  # only permits for a real user/PAT credential - GITHUB_TOKEN gets a 403
+  # ("Resource not accessible by integration") no matter what `permissions:`
+  # a workflow declares, and no matter the org/repo "Workflow permissions"
+  # setting; (2) even WITH a fully privileged credential, the classic
+  # branch+path serving method only accepts "/" or "/docs" as source.path -
+  # "/frontend" (this template's actual layout) is rejected outright (422
+  # "is not a possible value"). deploy.yml's deploy-pages job uses the
+  # modern Actions-based method instead, which has neither restriction and
+  # works fine with the plain GITHUB_TOKEN for the deploy itself - only the
+  # one-time Pages-site *creation* needs a human. See SCRAPING_LESSONS.md.
+  log_warn "GitHub Pages is not yet enabled for this repo, and cannot be enabled" \
+    "automatically - this is a GitHub platform limitation (GITHUB_TOKEN can never" \
+    "create a Pages site), not something this script can work around."
+  log_warn "ONE-TIME MANUAL STEP: Settings -> Pages -> Build and deployment ->" \
+    "Source: 'GitHub Actions'. deploy.yml's deploy-pages job will then publish" \
+    "frontend/ on every push to main. Re-run this script afterwards if you want" \
+    "this step to confirm it's enabled - it's idempotent and harmless either way."
 }
 
 provision_healthcheck() {
@@ -255,13 +264,36 @@ provision_healthcheck() {
 
 write_repo_secrets() {
   log_step "5/5 Writing generated identifiers back as repo secrets"
-  gh_secret_set "TURSO_DB_NAME" "$PROJECT_NAME"
-  gh_secret_set "CF_WORKER_NAME" "$PROJECT_NAME"
-  gh_secret_set "CLOUDFLARE_ACCOUNT_ID" "$CLOUDFLARE_ACCOUNT_ID"
+  # Each call is allowed to fail without aborting the script (note the `||`)
+  # - see the warning block below for why, and why commit_generated_config()
+  # must still run regardless of this step's outcome.
+  local any_failed="false"
+  gh_secret_set "TURSO_DB_NAME" "$PROJECT_NAME" || any_failed="true"
+  gh_secret_set "CF_WORKER_NAME" "$PROJECT_NAME" || any_failed="true"
+  gh_secret_set "CLOUDFLARE_ACCOUNT_ID" "$CLOUDFLARE_ACCOUNT_ID" || any_failed="true"
   if [[ -n "$HEALTHCHECK_URL" ]]; then
-    gh_secret_set "HEALTHCHECK_URL" "$HEALTHCHECK_URL"
+    gh_secret_set "HEALTHCHECK_URL" "$HEALTHCHECK_URL" || any_failed="true"
   fi
   log_info "TURSO_AUTH_TOKEN / SESSION_HMAC_SECRET stay Worker-only secrets, not duplicated as repo secrets."
+
+  if [[ "$any_failed" == "true" ]]; then
+    # Confirmed against GitHub's own workflow-syntax documentation: there is
+    # no "secrets" permission scope, in any form - GITHUB_TOKEN can NEVER
+    # write or manage repository Actions secrets, under any `permissions:`
+    # configuration or org/repo "Workflow permissions" setting. This is a
+    # hard platform limitation, not a bug in this script, and it would have
+    # crashed the entire remaining script (including commit_generated_config()
+    # below) under set -e before this fix.
+    log_warn "Could not write one or more repo secrets via GITHUB_TOKEN (expected -" \
+      "GITHUB_TOKEN can never write repo Actions secrets, under any configuration)." \
+      "Pick one:"
+    log_warn "  (a) Set them manually with your own authenticated gh session:" \
+      "gh secret set TURSO_DB_NAME --body '${PROJECT_NAME}' --repo <owner>/<repo>" \
+      "(repeat for CF_WORKER_NAME, CLOUDFLARE_ACCOUNT_ID, and HEALTHCHECK_URL if set)."
+    log_warn "  (b) Add a fine-grained PAT with 'Secrets: write' repo permission as an" \
+      "org-secret (e.g. GH_PAT), and pass it as this step's GH_TOKEN in bootstrap.yml" \
+      "instead of \${{ github.token }}."
+  fi
 }
 
 commit_generated_config() {
