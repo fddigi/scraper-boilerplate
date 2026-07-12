@@ -62,25 +62,26 @@ workflow-fil kan kun indskrænke org/repo-loftet, aldrig udvide det.
 `provision.sh` fejler ikke hårdt på dette (Turso/Worker-provisionering
 fortsætter), men commit-tilbage kræver rettelsen.
 
-**Vigtigt, ÉT MANUELT ENGANGS-TRIN pr. projekt: aktivér GitHub Pages selv,
-FØR eller lige efter bootstrap.yml.** Gå til repoets **Settings → Pages →
-Build and deployment → Source: "GitHub Actions"**. Dette kan IKKE
-automatiseres — `GITHUB_TOKEN` har aldrig lov til at oprette/aktivere en
-repos Pages-site, uanset permissions-indstillinger; det kræver en rigtig
-bruger-/PAT-legitimation (bekræftet mod GitHubs API, se `provision.sh`s
-`provision_pages()`-kommentar). `deploy.yml`s `deploy-pages`-job publicerer
-`frontend/` automatisk ved hvert push, når Pages først er aktiveret.
+**Vigtigt, ÉT ENGANGS-TRIN pr. projekt: kør `./infra/finish-bootstrap-locally.sh`
+lokalt, med en gang eller lige efter bootstrap.yml.** To ting kræver dette:
+GitHub Pages-aktivering og repo-secrets-skrivning kan **aldrig** lykkes via
+`GITHUB_TOKEN` (workflowets ephemer CI-identitet inde i `bootstrap.yml`) —
+ikke fordi det mangler et permission-flag, men fordi begge er administrative
+handlinger GitHub kun tillader for en rigtig, autentificeret bruger-/agent-
+session, uanset hvad `permissions:`-blokken erklærer eller hvad org/repo's
+"Workflow permissions" er sat til (bekræftet mod GitHubs API).
 
-**Vigtigt: `provision.sh`s sidste trin (repo-secrets) kan heller ikke lykkes
-via `GITHUB_TOKEN`** — der findes intet permission-scope, der giver
-`GITHUB_TOKEN` lov til at skrive/administrere en repos Actions-secrets,
-under nogen konfiguration. Scriptet advarer og fortsætter i stedet for at
-crashe. To muligheder: (a) sæt de 4 secrets manuelt bagefter med din egen
-`gh`-session (`gh secret set TURSO_DB_NAME --body '<projektnavn>'` osv. —
-scriptets egen advarsel viser de præcise kommandoer), eller (b) opret et
-fine-grained PAT med "Secrets: write"-repository-rettighed, gem det som et
-org-secret (fx `GH_PAT`), og brug det som `bootstrap.yml`s `GH_TOKEN` for
-dette trin i stedet for `${{ github.token }}`.
+Dette er **ikke** "et menneske skal klikke i browseren" — det er "skal køre
+uden for `GITHUB_TOKEN`s ephemer CI-kontekst". Enhver med en allerede-
+autentificeret `gh`-session på maskinen (et menneske, eller en agent der
+selv driver provisioneringen — begge virker identisk) kan bare køre scriptet
+selv, uden ny credential. Bevidst IKKE løst med en gemt PAT/org-secret i
+stedet: en permanent, bredere-end-`GITHUB_TOKEN`-legitimation er en dårligere
+handel end en lejlighedsvis lokal kommando, for et problem der reelt kun
+opstår én gang pr. projekt (se `docs/SCRAPING_LESSONS.md`).
+
+`provision.sh` fejler ikke hårdt på nogen af de to (Turso/Worker-
+provisionering fortsætter uanset), men advarer og peger på scriptet.
 
 **Vigtigt: nye projekter skal oprettes som OFFENTLIGE repos** (`gh repo create ... --template fddigi/scraper-boilerplate --public`, IKKE `--private`). Årsag: GitHub-organisationens gratis plan tillader kun deling af organisation-level secrets med offentlige repos ("Organization secrets cannot be used by private repositories with your plan") — private repos ville se alle fire org-secrets som tomme strenge i Actions, uden nogen fejlmelding, hvilket blokerer hele bootstrap-flowet. Ingen hemmeligheder committes nogensinde i selve koden (kun `wrangler secret put`/repo-secrets), så offentlig synlighed af kildekoden er et bevidst, sikkert valg her — samme mønster som PLAGG-projektet allerede bruger.
 
@@ -88,9 +89,8 @@ dette trin i stedet for `${{ github.token }}`.
 |---|------|---------------------|
 | 1 | Klik "Use this template" på GitHub (eller `gh repo create <navn> --template fddigi/scraper-boilerplate --public --clone`) og navngiv det nye repo | **Manuel** (klik/kommando) |
 | 2 | Sæt organisation-secrets ÉN GANG for hele din GitHub-organisation: `TURSO_PLATFORM_TOKEN`, `TURSO_ORG`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, og valgfrit `HEALTHCHECKS_API_KEY` | **Manuel** (kun første gang, arves af alle fremtidige projekter) |
-| 3a | Aktivér GitHub Pages manuelt: Settings → Pages → Source: "GitHub Actions" | **Manuel, engangs, kan IKKE automatiseres** (se boks ovenfor) |
-| 3b | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets, forsøger repo-secrets (kan kræve manuel opfølgning, se boks ovenfor) |
-| 4 | `git clone` det nye repo lokalt / på Mac Mini'en | **Manuel** (kommando) |
+| 3 | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets |
+| 4 | `git clone` det nye repo lokalt / på Mac Mini'en, kør `./infra/finish-bootstrap-locally.sh` (aktiverer Pages + skriver repo-secrets — `GITHUB_TOKEN` kan aldrig gøre nogen af delene, se boks ovenfor) | **Manuel kald, lokalt, idempotent** |
 | 5 | `cp .env.example .env`, kør `./infra/local-turso-env.sh --write` (kræver `turso auth login` — se "Lokal Turso-adgang" nedenfor) for at udfylde `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, og evt. `HEALTHCHECK_URL` manuelt fra repo-secrets | **Manuel kald, automatisk udfyldning** |
 | 6 | `./infra/add-user.sh` (secret-mode, default) - opretter admin-login | **Manuel kald, automatisk logik** - password vises ÉN gang |
 | 7 | ~~Ret `frontend/config.js`~~ — sket automatisk i trin 3 (`provision.sh` udfylder og committer `API_BASE`) | **Automatisk** |
@@ -220,9 +220,11 @@ session der virkede i Chrome men ikke Safari). Alle skabelon-niveau-fund er
 rettet i denne repos historik — se `docs/SCRAPING_LESSONS.md` og commit-loggen
 for detaljer. Kendte, resterende begrænsninger (dokumenteret, ikke skjulte):
 
-- GitHub Pages-aktivering og repo-secrets-skrivning kræver hver et manuelt
-  engangs-trin (se de to bokse ovenfor) — bekræftet, hårde platformsbegrænsninger
-  på `GITHUB_TOKEN`, ikke noget denne skabelon kan automatisere væk.
+- GitHub Pages-aktivering og repo-secrets-skrivning kræver begge ét lokalt
+  engangs-kald (`./infra/finish-bootstrap-locally.sh`, se boks ovenfor) —
+  bekræftet, hårde platformsbegrænsninger på `GITHUB_TOKEN` som CI-identitet,
+  ikke noget der kan/bør automatiseres væk via en permanent, mere magtfuld
+  credential i stedet.
 - `make install-launchd` er valideret separat (`plutil -lint` på den genererede
   plist) men ikke kørt for alvor i selve skabelon-udviklingen — det ville
   registrere et rigtigt baggrundsjob. `pa-speakers`s eget
@@ -238,8 +240,8 @@ for detaljer. Kendte, resterende begrænsninger (dokumenteret, ikke skjulte):
 2. Slå "Template repository" til under repoets Settings.
 3. Sæt de fire (plus valgfrit `HEALTHCHECKS_API_KEY`) organisation-secrets nævnt
    i tjeklisten ovenfor, og bekræft org-niveau "Workflow permissions".
-4. Opret et nyt repo fra skabelonen, aktivér Pages manuelt (trin 3a), og kør
-   `bootstrap.yml` (trin 3b).
+4. Opret et nyt repo fra skabelonen, kør `bootstrap.yml` (trin 3), og kør
+   derefter `./infra/finish-bootstrap-locally.sh` lokalt (trin 4).
 
 ## Afvigelser fra opgavebeskrivelsen
 

@@ -222,11 +222,12 @@ provision_pages() {
   fi
 
   # Deliberately does NOT attempt to create the Pages site via the API at
-  # all (an earlier version of this script tried a POST here and always
-  # failed). Confirmed impossible on two independent counts, verified with
-  # an authenticated user gh session against this exact API call: (1)
-  # creating/enabling a repo's Pages site is an administrative action GitHub
-  # only permits for a real user/PAT credential - GITHUB_TOKEN gets a 403
+  # all from HERE (an earlier version of this script tried a POST using
+  # GITHUB_TOKEN and always failed). Confirmed impossible on two independent
+  # counts, verified with an authenticated user gh session against this exact
+  # API call: (1) creating/enabling a repo's Pages site is an administrative
+  # action GitHub only permits for a real user/PAT credential - GITHUB_TOKEN
+  # (this script's identity when run FROM bootstrap.yml in CI) gets a 403
   # ("Resource not accessible by integration") no matter what `permissions:`
   # a workflow declares, and no matter the org/repo "Workflow permissions"
   # setting; (2) even WITH a fully privileged credential, the classic
@@ -235,14 +236,22 @@ provision_pages() {
   # "is not a possible value"). deploy.yml's deploy-pages job uses the
   # modern Actions-based method instead, which has neither restriction and
   # works fine with the plain GITHUB_TOKEN for the deploy itself - only the
-  # one-time Pages-site *creation* needs a human. See SCRAPING_LESSONS.md.
+  # one-time Pages-site *creation* needs a real credential.
+  #
+  # This is NOT "a human must click a button" - it's "must run outside
+  # GITHUB_TOKEN's ephemeral CI context". Deliberately NOT solved by storing
+  # a more powerful PAT as a persistent org-secret either (that trades a
+  # well-understood, ephemeral limitation for a standing, broader-than-
+  # GITHUB_TOKEN credential - a worse trade). Instead: run
+  # ./infra/finish-bootstrap-locally.sh once, locally, with whatever already-
+  # authenticated `gh` session exists on the provisioning machine (a human's,
+  # or an agent's - both work identically, no new credential needed). See
+  # docs/SCRAPING_LESSONS.md.
   log_warn "GitHub Pages is not yet enabled for this repo, and cannot be enabled" \
-    "automatically - this is a GitHub platform limitation (GITHUB_TOKEN can never" \
-    "create a Pages site), not something this script can work around."
-  log_warn "ONE-TIME MANUAL STEP: Settings -> Pages -> Build and deployment ->" \
-    "Source: 'GitHub Actions'. deploy.yml's deploy-pages job will then publish" \
-    "frontend/ on every push to main. Re-run this script afterwards if you want" \
-    "this step to confirm it's enabled - it's idempotent and harmless either way."
+    "from here (GITHUB_TOKEN can never create a Pages site, under any configuration)."
+  log_warn "Run './infra/finish-bootstrap-locally.sh' once, locally, using your own" \
+    "authenticated gh session (human or agent, either works) - it also finishes" \
+    "the repo-secrets step below if that fails too. Idempotent, safe to re-run."
 }
 
 provision_healthcheck() {
@@ -284,15 +293,16 @@ write_repo_secrets() {
     # hard platform limitation, not a bug in this script, and it would have
     # crashed the entire remaining script (including commit_generated_config()
     # below) under set -e before this fix.
+    #
+    # Deliberately NOT solved with a stored PAT/org-secret here either (same
+    # reasoning as provision_pages() above: a persistent, broader-than-
+    # GITHUB_TOKEN credential is a worse trade than an occasional local
+    # command). Use the machine's existing authenticated gh session instead.
     log_warn "Could not write one or more repo secrets via GITHUB_TOKEN (expected -" \
-      "GITHUB_TOKEN can never write repo Actions secrets, under any configuration)." \
-      "Pick one:"
-    log_warn "  (a) Set them manually with your own authenticated gh session:" \
-      "gh secret set TURSO_DB_NAME --body '${PROJECT_NAME}' --repo <owner>/<repo>" \
-      "(repeat for CF_WORKER_NAME, CLOUDFLARE_ACCOUNT_ID, and HEALTHCHECK_URL if set)."
-    log_warn "  (b) Add a fine-grained PAT with 'Secrets: write' repo permission as an" \
-      "org-secret (e.g. GH_PAT), and pass it as this step's GH_TOKEN in bootstrap.yml" \
-      "instead of \${{ github.token }}."
+      "GITHUB_TOKEN can never write repo Actions secrets, under any configuration)."
+    log_warn "Run './infra/finish-bootstrap-locally.sh' once, locally, using your own" \
+      "authenticated gh session (human or agent, either works) - it also finishes" \
+      "the GitHub Pages step above if that failed too. Idempotent, safe to re-run."
   fi
 }
 
