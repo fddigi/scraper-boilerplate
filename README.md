@@ -66,7 +66,7 @@ Worker-provisionering fortsætter), men Pages/commit-tilbage kræver rettelsen.
 | 2 | Sæt organisation-secrets ÉN GANG for hele din GitHub-organisation: `TURSO_PLATFORM_TOKEN`, `TURSO_ORG`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, og valgfrit `HEALTHCHECKS_API_KEY` | **Manuel** (kun første gang, arves af alle fremtidige projekter) |
 | 3 | Kør workflowet "Bootstrap new project" (Actions-fanen → workflow_dispatch) | **Manuel trigger, automatisk indhold** - opretter Turso-db, deployer Worker + secrets, aktiverer GitHub Pages, opretter healthcheck (hvis `HEALTHCHECKS_API_KEY` er sat), skriver repo-secrets |
 | 4 | `git clone` det nye repo lokalt / på Mac Mini'en | **Manuel** (kommando) |
-| 5 | `cp .env.example .env` og udfyld `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` / evt. `HEALTHCHECK_URL` (alle fra trin 3's output/repo-secrets, eller `turso db show <navn>`) | **Manuel** (udfyld værdier) |
+| 5 | `cp .env.example .env`, kør `./infra/local-turso-env.sh --write` (kræver `turso auth login` — se "Lokal Turso-adgang" nedenfor) for at udfylde `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, og evt. `HEALTHCHECK_URL` manuelt fra repo-secrets | **Manuel kald, automatisk udfyldning** |
 | 6 | `./infra/add-user.sh` (secret-mode, default) - opretter admin-login | **Manuel kald, automatisk logik** - password vises ÉN gang |
 | 7 | ~~Ret `frontend/config.js`~~ — sket automatisk i trin 3 (`provision.sh` udfylder og committer `API_BASE`) | **Automatisk** |
 | 8 | `make venv && make install-launchd` på Mac Mini'en | **Manuel kald, automatisk resten** - venv, launchd-plist, `launchctl load` |
@@ -76,6 +76,37 @@ Worker-provisionering fortsætter), men Pages/commit-tilbage kræver rettelsen.
 Alt andet (schema-migration, secrets-hygiejne, CORS-lås, rate-limiting,
 delta-sync-logik) er allerede bygget ind i skabelonen - der er intet at "huske"
 per projekt ud over ovenstående ni klik/kommandoer.
+
+## Lokal Turso-adgang (`infra/local-turso-env.sh`)
+
+Uden dette trin viser frontend'en altid en tom liste, selvom scraperen kører
+fint lokalt: den lokale scraper skriver til en ANDEN Turso-forbindelse end den,
+Worker'en læser fra, medmindre `.env`'s `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`
+faktisk peger på den rigtige database.
+
+`TURSO_AUTH_TOKEN` bliver ALDRIG logget eller gemt noget sted efter
+`bootstrap.yml` har kørt - den bruges kun momentant til at sætte Worker'ens
+egen secret. Det er ikke en fejl, det er write-once-by-design for en
+hemmelighed. Løsningen er ikke at "finde" det oprindelige token igen, men at
+mint et NYT token til lokal brug:
+
+**Forudsætning, ÉN GANG PR. MASKINE (ikke pr. projekt):**
+```bash
+turso auth login   # interaktiv, åbner en browser
+```
+
+**Pr. projekt, når som helst du har brug for lokal sync:**
+```bash
+./infra/local-turso-env.sh           # printer TURSO_DATABASE_URL/TURSO_AUTH_TOKEN til at kopiere ind
+./infra/local-turso-env.sh --write   # eller lad den selv opdatere .env
+```
+
+Bevidst IKKE baseret på `TURSO_PLATFORM_TOKEN` (org-secreten `provision.sh`
+bruger til automatiseret provisionering) - det er et langt mere magtfuldt,
+org-bredt token, og hører ikke hjemme i en lokal `.env`-fil pr. udvikler-
+maskine. Et `turso auth login`-mintet token er personligt og til enhver tid
+selvstændigt tilbagekaldeligt uden at påvirke provisioneringen af andre
+projekter.
 
 ## Brugeradministration (`infra/add-user.sh`)
 
