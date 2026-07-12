@@ -187,8 +187,14 @@ make lint          # ruff
 cd worker
 npm install
 npx tsc --noEmit   # typecheck
-npx vitest run     # unit-tests for password-hash / session-cookie-logik
+npx vitest run     # unit-tests for password-hash / session-token-logik
 npx wrangler dev    # lokal dev-server (kræver ikke live Cloudflare-deploy)
+
+# Fejlsøger et RIGTIGT (ikke wrangler-dev) miljøs KV-indhold? `wrangler kv
+# key list/get/put/delete` rammer som standard en LOKAL simuleret butik,
+# ikke den rigtige Cloudflare KV, selv med et rigtigt namespace-id - tilføj
+# altid --remote:
+npx wrangler kv key list --namespace-id <id> --remote
 ```
 
 ## Secrets-hygiejne
